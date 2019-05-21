@@ -6,6 +6,7 @@
 require(tidyverse)
 require(data.table)
 require(scales)
+require(boot)
 
 #set working directory 
 sst = read.csv("/Users/katiezarada/Library/Mobile Documents/com~apple~CloudDocs/Seatrout/Data/sst_new_ghostremoved.csv", header= TRUE, stringsAsFactors = FALSE) #laptop
@@ -100,9 +101,11 @@ sst = sst[-which(sst$year_tag == "2008 11")]  #removing the recaptures
    # Initial values
       inits = function(){list(z = cjs.init.z(CH.mat, f.vec),phi.mu.s=runif(2, 0, 1),phi.sd.s=runif(2, 0, 1),p.mu.s=runif(2, 0, 1),p.sd.s=runif(2, 0, 1) ,phi.g = matrix(runif(6, 0, 1),nrow=2,ncol=3), p.g = matrix(runif(6, 0, 1),nrow=2,ncol=3))}  
    # sink JAGS model
-      source("/Users/katiezarada/Library/Mobile Documents/com~apple~CloudDocs/Seatrout/CJS_Models/Seatrout_CJS_1/Seatrout_CJS_H1.r")
+      #source("/Users/katiezarada/Library/Mobile Documents/com~apple~CloudDocs/Seatrout/CJS_Models/Seatrout_CJS_1/Seatrout_CJS_H1.r")
+       source("/Users/katiezarada/Library/Mobile Documents/com~apple~CloudDocs/Seatrout/CJS_Models/Seatrout_CJS_1/Seatrout_CJS_H1_inv.logit.r")
+
    # Parameters monitored
-      parameters = c("phi.mu.s","phi.sd.s","p.mu.s","p.sd.s","phi.g", "p.g")
+      parameters = c("phi.mu.s","phi.sd.s","p.mu.s","p.sd.s","phi.g", "p.g", "phi.g.trans", "p.g.trans")
 
    # MCMC settings
       ni = 50000
@@ -127,7 +130,7 @@ sst = sst[-which(sst$year_tag == "2008 11")]  #removing the recaptures
 
 
    # diagnostics
-     require(coda)
+     require(coda) 
      # Gelman and Rubin Multiple Sequence Diagnostic - convergence
 		gelman.diag(Seatrout_CJS_H1$mcmc)
 		gelman.plot(Seatrout_CJS_H1$mcmc)
@@ -143,15 +146,23 @@ sst = sst[-which(sst$year_tag == "2008 11")]  #removing the recaptures
 		Seatrout_CJS_H1.MCMC = as.matrix(Seatrout_CJS_H1$mcmc)
 		Seatrout_CJS_H1.params = colnames(Seatrout_CJS_H1.MCMC)
 	
+	#inv transform sex means 
+		Seatrout_CJS_H1.MCMC[,c(1,2,5,6)] <- inv.logit(Seatrout_CJS_H1.MCMC[,c(1,2,5,6)])
+	
+
 	#get summary on posteriors 
+
 	info.Z <- as.data.frame(Seatrout_CJS_H1.MCMC) %>% 
 	            select(contains("phi")) %>% 
 	            mutate_all(funs(-log(.^365))) 
-	info.Z <- apply(info.Z, 2, FUN = summary)          
+	info.Z <- apply(info.Z, 2, FUN = summary)       
 	
-  info <- Seatrout_CJS_H1.MCMC[,c(5,6,15:20)]
+	
+  info <- Seatrout_CJS_H1.MCMC[,c(5,6,15:20, 27:32)]
 	info <- apply(info, 2, FUN = summary)
 		
+ci <- apply(Seatrout_CJS_H1.MCMC,2,quantile,c(0.025,0.5,0.975))
+
 		
 ##############################################################
 #
@@ -166,10 +177,20 @@ data_summary <- function(x) {
    return(c(y=m,ymin=ymin,ymax=ymax))
 }
 
+ci_summary <- function(x){
+	m <- unname(quantile(x, 0.5))
+	ymin <- unname(quantile(x, 0.025))
+	ymax <- unname(quantile(x, 0.975))
+	return(c(y=m, ymin = ymin, ymax = ymax))
+}
 
-zindex = -log((Seatrout_CJS_H1.MCMC[,c(1,2,9:14)])^365)
 
-datZ = Seatrout_CJS_H1.MCMC[,c(1,2,9:14)]
+
+zindex = -log((Seatrout_CJS_H1.MCMC[,c(1,2,9:14, 21:26)])^365)
+
+datZ = Seatrout_CJS_H1.MCMC[,c(1,2,21:26)]
+ci.z <- apply(datZ,2,function(x) -log(x^365))
+ci.z <- apply(ci.z, 2, quantile,c(0.025,0.5,0.975))
 colnames(datZ) <- c("F","M", "F_1", "M_1", "F_2", "M_2", "F_3", "M_3")
 datZ = as.data.frame(datZ)
 datZ$num = seq(1, 20000)
@@ -178,8 +199,8 @@ datZ = datZ %>% gather(Group, Value, 1:8)
  datZ$Value = -log(datZ$Value^365)
 
 
- ggplot(datZ, aes(x=Group, y=Value, fill = Group)) + 
-  geom_violin() +  stat_summary(fun.data=data_summary) + 
+ p <- ggplot(datZ, aes(x=Group, y=Value, fill = Group)) + 
+  geom_violin() +  stat_summary(fun.data=ci_summary) + 
   labs(y= "Instantaneous Loss", x = "Group") + ylim(0,20)+ theme_bw() +  
   theme(legend.position="none") + scale_fill_grey() + 
   scale_x_discrete(limits = c("F", "M","F_1", "F_2", "F_3","M_1", "M_2", "M_3"), labels=c("F" = "Female", "M" = "Male", "F_1" ="Small Female", "F_2" = "Med Female", "F_3"="Large Female","M_1" ="Small Male", "M_2" = "Med Male", "M_3"="Large Male" )) +
@@ -187,15 +208,15 @@ datZ = datZ %>% gather(Group, Value, 1:8)
 
 
 
-dat = Seatrout_CJS_H1.MCMC[,c(5,6,15:20)]
+dat = Seatrout_CJS_H1.MCMC[,c(5,6,27:32)]
 colnames(dat) <- c("F","M", "F_1", "M_1", "F_2", "M_2", "F_3", "M_3")
 dat = as.data.frame(dat)
 dat$num = seq(1, 20000)
 dat = dat %>% gather(Group, Value, 1:8)
 
  
- ggplot(dat, aes(x=Group, y=Value, fill = Group)) + 
-  geom_violin() +  stat_summary(fun.data=data_summary) + labs(y= "Probability of Being in the Spawning Grounds", x = "Group") + theme_bw() + 
+ q <- ggplot(dat, aes(x=Group, y=Value, fill = Group)) + 
+  geom_violin() +  stat_summary(fun.data=ci_summary) + labs(y= "Probability of Being in the Spawning Grounds", x = "Group") + theme_bw() + 
     scale_x_discrete(limits = c("F", "M","F_1", "F_2", "F_3","M_1", "M_2", "M_3"), labels=c("F" = "Female", "M" = "Male", "F_1" ="Small Female", "F_2" = "Med Female", "F_3"="Large Female","M_1" ="Small Male", "M_2" = "Med Male", "M_3"="Large Male" ))+ 
     ylim(0,0.75) + theme(legend.position="none") + scale_fill_grey() + 
       theme(axis.text.x = element_text(face="bold", size=14),axis.text.y = element_text(face="bold", size=14), axis.title.x = element_text(face = "bold", size = 18), axis.title.y = element_text(face = "bold", size = 18))
